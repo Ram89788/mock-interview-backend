@@ -4,7 +4,7 @@ const { authMiddleware, adminOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/students - List students (filtered by college for interviewers)
+// GET /api/students - List students (filtered by assigned colleges for interviewers)
 router.get('/', authMiddleware, async (req, res) => {
     try {
         const { college_id } = req.query;
@@ -16,9 +16,30 @@ router.get('/', authMiddleware, async (req, res) => {
         const params = [];
 
         if (req.user.role === 'interviewer') {
-            // Interviewers can only see students from their assigned college
-            query += ' WHERE s.college_id = $1';
-            params.push(req.user.assignedCollegeId);
+            // Interviewers can only see students from their assigned colleges
+            const collegeIdsResult = await pool.query(
+                'SELECT college_id FROM interviewer_colleges WHERE user_id = $1',
+                [req.user.id]
+            );
+            const assignedIds = collegeIdsResult.rows.map(r => r.college_id);
+
+            if (assignedIds.length === 0) {
+                return res.json([]); // No colleges assigned
+            }
+
+            // If a specific college_id is passed, only show if it's one of their assigned
+            if (college_id) {
+                if (!assignedIds.includes(parseInt(college_id))) {
+                    return res.json([]); // Not authorized for this college
+                }
+                query += ' WHERE s.college_id = $1';
+                params.push(college_id);
+            } else {
+                // Show students from all assigned colleges
+                const placeholders = assignedIds.map((_, i) => `$${i + 1}`).join(', ');
+                query += ` WHERE s.college_id IN (${placeholders})`;
+                params.push(...assignedIds);
+            }
         } else if (college_id) {
             query += ' WHERE s.college_id = $1';
             params.push(college_id);

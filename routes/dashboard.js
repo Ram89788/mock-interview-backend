@@ -32,24 +32,53 @@ router.get('/stats', authMiddleware, async (req, res) => {
                 recentActivity: recentRes.rows,
             });
         } else {
-            // Interviewer dashboard
-            const collegeId = req.user.assignedCollegeId;
-            const [collegeRes, studentsRes, evaluationsRes, myStudentsRes] = await Promise.all([
-                pool.query('SELECT name FROM colleges WHERE id = $1', [collegeId]),
-                pool.query('SELECT COUNT(*) as count FROM students WHERE college_id = $1', [collegeId]),
-                pool.query('SELECT COUNT(*) as count FROM evaluations WHERE interviewer_id = $1', [req.user.id]),
-                pool.query(`
-                    SELECT s.id, s.name, s.email, s.branch, s.year,
-                           CASE WHEN e.id IS NOT NULL THEN 'Completed' ELSE 'Pending' END as status
-                    FROM students s
-                    LEFT JOIN evaluations e ON e.student_id = s.id AND e.interviewer_id = $1
-                    WHERE s.college_id = $2
-                    ORDER BY s.name
-                `, [req.user.id, collegeId]),
+            // Interviewer dashboard — multiple colleges
+            const collegeIdsResult = await pool.query(
+                'SELECT college_id FROM interviewer_colleges WHERE user_id = $1',
+                [req.user.id]
+            );
+            const assignedIds = collegeIdsResult.rows.map(r => r.college_id);
+
+            if (assignedIds.length === 0) {
+                return res.json({
+                    assignedColleges: [],
+                    totalStudents: 0,
+                    completedInterviews: 0,
+                    students: [],
+                });
+            }
+
+            // Build placeholders for IN clause
+            const placeholders = assignedIds.map((_, i) => `$${i + 1}`).join(', ');
+
+            const [collegesRes, studentsRes, evaluationsRes, myStudentsRes] = await Promise.all([
+                pool.query(
+                    `SELECT id, name FROM colleges WHERE id IN (${placeholders})`,
+                    assignedIds
+                ),
+                pool.query(
+                    `SELECT COUNT(*) as count FROM students WHERE college_id IN (${placeholders})`,
+                    assignedIds
+                ),
+                pool.query(
+                    'SELECT COUNT(*) as count FROM evaluations WHERE interviewer_id = $1',
+                    [req.user.id]
+                ),
+                pool.query(
+                    `SELECT s.id, s.name, s.email, s.branch, s.year, c.name as college_name,
+                            CASE WHEN e.id IS NOT NULL THEN 'Completed' ELSE 'Pending' END as status
+                     FROM students s
+                     JOIN colleges c ON s.college_id = c.id
+                     LEFT JOIN evaluations e ON e.student_id = s.id AND e.interviewer_id = $1
+                     WHERE s.college_id IN (${assignedIds.map((_, i) => `$${i + 2}`).join(', ')})
+                     ORDER BY c.name, s.name`,
+                    [req.user.id, ...assignedIds]
+                ),
             ]);
 
             res.json({
-                assignedCollege: collegeRes.rows[0]?.name || 'Not Assigned',
+                assignedColleges: collegesRes.rows,
+                assignedCollege: collegesRes.rows.map(c => c.name).join(', '),
                 totalStudents: parseInt(studentsRes.rows[0].count),
                 completedInterviews: parseInt(evaluationsRes.rows[0].count),
                 students: myStudentsRes.rows,

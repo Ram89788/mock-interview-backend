@@ -6,6 +6,28 @@ const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper: Get assigned college IDs for an interviewer
+async function getAssignedCollegeIds(userId) {
+    const result = await pool.query(
+        'SELECT college_id FROM interviewer_colleges WHERE user_id = $1',
+        [userId]
+    );
+    return result.rows.map(r => r.college_id);
+}
+
+// Helper: Get assigned colleges with names for an interviewer
+async function getAssignedColleges(userId) {
+    const result = await pool.query(
+        `SELECT c.id, c.name 
+         FROM interviewer_colleges ic 
+         JOIN colleges c ON ic.college_id = c.id 
+         WHERE ic.user_id = $1 
+         ORDER BY c.name`,
+        [userId]
+    );
+    return result.rows;
+}
+
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
     try {
@@ -15,10 +37,7 @@ router.post('/login', async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT u.*, c.name as college_name 
-             FROM users u 
-             LEFT JOIN colleges c ON u.assigned_college_id = c.id 
-             WHERE u.email = $1`,
+            'SELECT * FROM users WHERE email = $1',
             [email]
         );
 
@@ -32,14 +51,21 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
+        // Get assigned colleges for interviewers
+        let assignedCollegeIds = [];
+        let assignedColleges = [];
+        if (user.role === 'interviewer') {
+            assignedCollegeIds = await getAssignedCollegeIds(user.id);
+            assignedColleges = await getAssignedColleges(user.id);
+        }
+
         const token = jwt.sign(
             {
                 id: user.id,
                 email: user.email,
                 role: user.role,
                 name: user.name,
-                assignedCollegeId: user.assigned_college_id,
-                assignedCollege: user.college_name,
+                assignedCollegeIds: assignedCollegeIds,
             },
             process.env.JWT_SECRET,
             { expiresIn: '24h' }
@@ -52,8 +78,8 @@ router.post('/login', async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                assignedCollegeId: user.assigned_college_id,
-                assignedCollege: user.college_name,
+                assignedCollegeIds: assignedCollegeIds,
+                assignedColleges: assignedColleges,
             },
         });
     } catch (err) {
@@ -66,10 +92,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT u.id, u.name, u.email, u.role, u.assigned_college_id, c.name as college_name
-             FROM users u
-             LEFT JOIN colleges c ON u.assigned_college_id = c.id
-             WHERE u.id = $1`,
+            'SELECT id, name, email, role FROM users WHERE id = $1',
             [req.user.id]
         );
 
@@ -78,13 +101,22 @@ router.get('/me', authMiddleware, async (req, res) => {
         }
 
         const user = result.rows[0];
+
+        // Get assigned colleges for interviewers
+        let assignedCollegeIds = [];
+        let assignedColleges = [];
+        if (user.role === 'interviewer') {
+            assignedCollegeIds = await getAssignedCollegeIds(user.id);
+            assignedColleges = await getAssignedColleges(user.id);
+        }
+
         res.json({
             id: user.id,
             name: user.name,
             email: user.email,
             role: user.role,
-            assignedCollegeId: user.assigned_college_id,
-            assignedCollege: user.college_name,
+            assignedCollegeIds: assignedCollegeIds,
+            assignedColleges: assignedColleges,
         });
     } catch (err) {
         console.error('Get user error:', err);

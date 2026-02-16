@@ -8,6 +8,7 @@ async function seed() {
 
         // Clear existing data
         await client.query('DELETE FROM evaluations');
+        await client.query('DELETE FROM interviewer_colleges');
         await client.query('DELETE FROM students');
         await client.query('DELETE FROM users');
         await client.query('DELETE FROM colleges');
@@ -17,6 +18,7 @@ async function seed() {
         await client.query("ALTER SEQUENCE users_id_seq RESTART WITH 1");
         await client.query("ALTER SEQUENCE students_id_seq RESTART WITH 1");
         await client.query("ALTER SEQUENCE evaluations_id_seq RESTART WITH 1");
+        await client.query("ALTER SEQUENCE interviewer_colleges_id_seq RESTART WITH 1");
 
         // 1. Seed Colleges
         const colleges = [
@@ -38,21 +40,29 @@ async function seed() {
         );
         console.log('  ✅ Admin user seeded (admin@crt.com / admin123)');
 
-        // 3. Seed Interviewers
+        // 3. Seed Interviewers (with multiple college assignments)
         const interviewerPassword = await bcrypt.hash('interviewer123', 10);
         const interviewers = [
-            { name: 'Rajesh Kumar', email: 'rajesh@crt.com', collegeId: 1 },
-            { name: 'Priya Sharma', email: 'priya@crt.com', collegeId: 2 },
-            { name: 'Anil Reddy', email: 'anil@crt.com', collegeId: 3 },
+            { name: 'Rajesh Kumar', email: 'rajesh@crt.com', collegeIds: [1, 2] },      // Assigned to JNTU + VIT
+            { name: 'Priya Sharma', email: 'priya@crt.com', collegeIds: [2, 3] },       // Assigned to VIT + CBIT
+            { name: 'Anil Reddy', email: 'anil@crt.com', collegeIds: [1, 3] },          // Assigned to JNTU + CBIT
         ];
 
         for (const i of interviewers) {
-            await client.query(
-                "INSERT INTO users (name, email, password, role, assigned_college_id) VALUES ($1, $2, $3, 'interviewer', $4)",
-                [i.name, i.email, interviewerPassword, i.collegeId]
+            const result = await client.query(
+                "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, 'interviewer') RETURNING id",
+                [i.name, i.email, interviewerPassword]
             );
+            const userId = result.rows[0].id;
+            // Insert college assignments
+            for (const collegeId of i.collegeIds) {
+                await client.query(
+                    'INSERT INTO interviewer_colleges (user_id, college_id) VALUES ($1, $2)',
+                    [userId, collegeId]
+                );
+            }
         }
-        console.log('  ✅ Interviewers seeded (password: interviewer123)');
+        console.log('  ✅ Interviewers seeded with multi-college assignments (password: interviewer123)');
 
         // 4. Seed Students
         const students = [
@@ -123,9 +133,9 @@ async function seed() {
         console.log('\n🎉 Database seeded successfully!');
         console.log('\n📋 Login Credentials:');
         console.log('   Admin:        admin@crt.com / admin123');
-        console.log('   Interviewer:  rajesh@crt.com / interviewer123');
-        console.log('   Interviewer:  priya@crt.com / interviewer123');
-        console.log('   Interviewer:  anil@crt.com / interviewer123\n');
+        console.log('   Interviewer:  rajesh@crt.com / interviewer123  (JNTU + VIT)');
+        console.log('   Interviewer:  priya@crt.com / interviewer123   (VIT + CBIT)');
+        console.log('   Interviewer:  anil@crt.com / interviewer123    (JNTU + CBIT)\n');
     } catch (err) {
         console.error('❌ Seed failed:', err.message);
         process.exit(1);
