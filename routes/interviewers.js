@@ -18,6 +18,20 @@ async function getAssignedColleges(userId) {
     return result.rows;
 }
 
+// Helper: Get assigned batches for an interviewer
+async function getAssignedBatches(userId) {
+    const result = await pool.query(
+        `SELECT b.id, b.batch_name, b.college_id, c.name as college_name
+         FROM interviewer_batches ib 
+         JOIN batches b ON ib.batch_id = b.id 
+         JOIN colleges c ON b.college_id = c.id
+         WHERE ib.user_id = $1 
+         ORDER BY c.name, b.batch_name`,
+        [userId]
+    );
+    return result.rows;
+}
+
 // GET /api/interviewers - List all interviewers
 router.get('/', authMiddleware, adminOnly, async (req, res) => {
     try {
@@ -28,16 +42,18 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
              ORDER BY u.name`
         );
 
-        // Fetch assigned colleges for each interviewer
+        // Fetch assigned colleges and batches for each interviewer
         const interviewers = [];
         for (const interviewer of result.rows) {
             const colleges = await getAssignedColleges(interviewer.id);
+            const batches = await getAssignedBatches(interviewer.id);
             interviewers.push({
                 ...interviewer,
                 assigned_colleges: colleges,
                 assigned_college_ids: colleges.map(c => c.id),
-                // Backwards compatible: comma-separated names
                 assigned_college: colleges.map(c => c.name).join(', ') || 'Not Assigned',
+                assigned_batches: batches,
+                assigned_batch_ids: batches.map(b => b.id),
             });
         }
 
@@ -63,12 +79,15 @@ router.get('/:id', authMiddleware, adminOnly, async (req, res) => {
 
         const interviewer = result.rows[0];
         const colleges = await getAssignedColleges(interviewer.id);
+        const batches = await getAssignedBatches(interviewer.id);
 
         res.json({
             ...interviewer,
             assigned_colleges: colleges,
             assigned_college_ids: colleges.map(c => c.id),
             assigned_college: colleges.map(c => c.name).join(', ') || 'Not Assigned',
+            assigned_batches: batches,
+            assigned_batch_ids: batches.map(b => b.id),
         });
     } catch (err) {
         console.error('Get interviewer error:', err);
@@ -79,7 +98,7 @@ router.get('/:id', authMiddleware, adminOnly, async (req, res) => {
 // POST /api/interviewers - Create interviewer (Admin only)
 router.post('/', authMiddleware, adminOnly, async (req, res) => {
     try {
-        const { name, email, password, assigned_college_ids } = req.body;
+        const { name, email, password, assigned_college_ids, assigned_batch_ids } = req.body;
         if (!name || !email || !password) {
             return res.status(400).json({ error: 'Name, email, and password are required.' });
         }
@@ -113,15 +132,28 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
                 );
             }
 
+            // Insert batch assignments
+            if (assigned_batch_ids && Array.isArray(assigned_batch_ids)) {
+                for (const batchId of assigned_batch_ids) {
+                    await client.query(
+                        'INSERT INTO interviewer_batches (user_id, batch_id) VALUES ($1, $2)',
+                        [userId, parseInt(batchId)]
+                    );
+                }
+            }
+
             await client.query('COMMIT');
 
             // Fetch full data
             const colleges = await getAssignedColleges(userId);
+            const batches = await getAssignedBatches(userId);
             res.status(201).json({
                 ...userResult.rows[0],
                 assigned_colleges: colleges,
                 assigned_college_ids: colleges.map(c => c.id),
                 assigned_college: colleges.map(c => c.name).join(', ') || 'Not Assigned',
+                assigned_batches: batches,
+                assigned_batch_ids: batches.map(b => b.id),
             });
         } catch (innerErr) {
             await client.query('ROLLBACK');
@@ -138,7 +170,7 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 // PUT /api/interviewers/:id - Update interviewer (Admin only)
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
     try {
-        const { name, email, password, assigned_college_ids } = req.body;
+        const { name, email, password, assigned_college_ids, assigned_batch_ids } = req.body;
         const userId = req.params.id;
 
         const client = await pool.connect();
@@ -189,6 +221,19 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
                 }
             }
 
+            // Update batch assignments if provided
+            if (assigned_batch_ids && Array.isArray(assigned_batch_ids)) {
+                // Remove existing batch assignments
+                await client.query('DELETE FROM interviewer_batches WHERE user_id = $1', [userId]);
+                // Insert new ones
+                for (const batchId of assigned_batch_ids) {
+                    await client.query(
+                        'INSERT INTO interviewer_batches (user_id, batch_id) VALUES ($1, $2)',
+                        [userId, parseInt(batchId)]
+                    );
+                }
+            }
+
             await client.query('COMMIT');
 
             // Fetch updated data
@@ -197,12 +242,15 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
                 [userId]
             );
             const colleges = await getAssignedColleges(userId);
+            const batches = await getAssignedBatches(userId);
 
             res.json({
                 ...userResult.rows[0],
                 assigned_colleges: colleges,
                 assigned_college_ids: colleges.map(c => c.id),
                 assigned_college: colleges.map(c => c.name).join(', ') || 'Not Assigned',
+                assigned_batches: batches,
+                assigned_batch_ids: batches.map(b => b.id),
             });
         } catch (innerErr) {
             await client.query('ROLLBACK');

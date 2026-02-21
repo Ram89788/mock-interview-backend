@@ -28,6 +28,29 @@ async function getAssignedColleges(userId) {
     return result.rows;
 }
 
+// Helper: Get assigned batch IDs for an interviewer
+async function getAssignedBatchIds(userId) {
+    const result = await pool.query(
+        'SELECT batch_id FROM interviewer_batches WHERE user_id = $1',
+        [userId]
+    );
+    return result.rows.map(r => r.batch_id);
+}
+
+// Helper: Get assigned batches with details for an interviewer
+async function getAssignedBatches(userId) {
+    const result = await pool.query(
+        `SELECT b.id, b.batch_name, b.college_id, c.name as college_name
+         FROM interviewer_batches ib 
+         JOIN batches b ON ib.batch_id = b.id 
+         JOIN colleges c ON b.college_id = c.id
+         WHERE ib.user_id = $1 
+         ORDER BY c.name, b.batch_name`,
+        [userId]
+    );
+    return result.rows;
+}
+
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
     try {
@@ -51,15 +74,19 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
-        // Get assigned colleges for interviewers
+        // Get assigned colleges and batches for interviewers
         let assignedCollegeIds = [];
         let assignedColleges = [];
+        let assignedBatchIds = [];
+        let assignedBatches = [];
         let collegeId = null;
         let collegeName = null;
 
         if (user.role === 'interviewer') {
             assignedCollegeIds = await getAssignedCollegeIds(user.id);
             assignedColleges = await getAssignedColleges(user.id);
+            assignedBatchIds = await getAssignedBatchIds(user.id);
+            assignedBatches = await getAssignedBatches(user.id);
         } else if (user.role === 'college') {
             collegeId = user.assigned_college_id;
             if (collegeId) {
@@ -75,6 +102,7 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 name: user.name,
                 assignedCollegeIds: assignedCollegeIds,
+                assignedBatchIds: assignedBatchIds,
                 collegeId: collegeId,
             },
             process.env.JWT_SECRET,
@@ -90,6 +118,8 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 assignedCollegeIds: assignedCollegeIds,
                 assignedColleges: assignedColleges,
+                assignedBatchIds: assignedBatchIds,
+                assignedBatches: assignedBatches,
                 collegeId: collegeId,
                 collegeName: collegeName,
             },
@@ -114,15 +144,19 @@ router.get('/me', authMiddleware, async (req, res) => {
 
         const user = result.rows[0];
 
-        // Get assigned colleges for interviewers
+        // Get assigned colleges and batches for interviewers
         let assignedCollegeIds = [];
         let assignedColleges = [];
+        let assignedBatchIds = [];
+        let assignedBatches = [];
         let collegeId = null;
         let collegeName = null;
 
         if (user.role === 'interviewer') {
             assignedCollegeIds = await getAssignedCollegeIds(user.id);
             assignedColleges = await getAssignedColleges(user.id);
+            assignedBatchIds = await getAssignedBatchIds(user.id);
+            assignedBatches = await getAssignedBatches(user.id);
         } else if (user.role === 'college') {
             collegeId = user.assigned_college_id;
             if (collegeId) {
@@ -138,6 +172,8 @@ router.get('/me', authMiddleware, async (req, res) => {
             role: user.role,
             assignedCollegeIds: assignedCollegeIds,
             assignedColleges: assignedColleges,
+            assignedBatchIds: assignedBatchIds,
+            assignedBatches: assignedBatches,
             collegeId: collegeId,
             collegeName: collegeName,
         });

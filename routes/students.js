@@ -84,45 +84,104 @@ function parseFile(buffer, originalName) {
 // ============================================
 router.get('/', authMiddleware, async (req, res) => {
     try {
-        const { college_id } = req.query;
+        const { college_id, batch_id } = req.query;
         let query = `
             SELECT s.*, c.name as college_name,
+                   b.batch_name,
                    CASE WHEN COUNT(e.id) > 0 THEN true ELSE false END as is_evaluated,
                    COUNT(e.id)::int as evaluation_count
             FROM students s 
             JOIN colleges c ON s.college_id = c.id
+            LEFT JOIN batches b ON s.batch_id = b.id
             LEFT JOIN evaluations e ON e.student_id = s.id
         `;
         const params = [];
+        const conditions = [];
 
         if (req.user.role === 'interviewer') {
+            // Get assigned colleges
             const collegeIdsResult = await pool.query(
                 'SELECT college_id FROM interviewer_colleges WHERE user_id = $1',
                 [req.user.id]
             );
-            const assignedIds = collegeIdsResult.rows.map(r => r.college_id);
+            const assignedCollegeIds = collegeIdsResult.rows.map(r => r.college_id);
 
-            if (assignedIds.length === 0) {
+            if (assignedCollegeIds.length === 0) {
                 return res.json([]);
             }
 
+            // Get assigned batches
+            const batchIdsResult = await pool.query(
+                'SELECT batch_id FROM interviewer_batches WHERE user_id = $1',
+                [req.user.id]
+            );
+            const assignedBatchIds = batchIdsResult.rows.map(r => r.batch_id);
+
             if (college_id) {
-                if (!assignedIds.includes(parseInt(college_id))) {
+                if (!assignedCollegeIds.includes(parseInt(college_id))) {
                     return res.json([]);
                 }
-                query += ' WHERE s.college_id = $1';
+                conditions.push(`s.college_id = $${params.length + 1}`);
                 params.push(college_id);
             } else {
-                const placeholders = assignedIds.map((_, i) => `$${i + 1}`).join(', ');
-                query += ` WHERE s.college_id IN (${placeholders})`;
-                params.push(...assignedIds);
+                const placeholders = assignedCollegeIds.map((_, i) => `$${params.length + i + 1}`).join(', ');
+                conditions.push(`s.college_id IN (${placeholders})`);
+                params.push(...assignedCollegeIds);
             }
-        } else if (college_id) {
-            query += ' WHERE s.college_id = $1';
-            params.push(college_id);
+
+            // If interviewer has assigned batches, filter by them
+            if (assignedBatchIds.length > 0) {
+                if (batch_id) {
+                    // Explicit batch filter — verify it's in their assigned list
+                    if (!assignedBatchIds.includes(parseInt(batch_id))) {
+                        return res.json([]);
+                    }
+                    conditions.push(`s.batch_id = $${params.length + 1}`);
+                    params.push(batch_id);
+                } else {
+                    // Filter by all assigned batches for the selected college
+                    // Get batches that belong to the selected college(s)
+                    const collegeScopedBatchIds = [];
+                    if (college_id) {
+                        // Only keep batches that belong to this specific college
+                        const batchCollegeResult = await pool.query(
+                            `SELECT b.id FROM batches b 
+                             JOIN interviewer_batches ib ON ib.batch_id = b.id 
+                             WHERE ib.user_id = $1 AND b.college_id = $2`,
+                            [req.user.id, college_id]
+                        );
+                        collegeScopedBatchIds.push(...batchCollegeResult.rows.map(r => r.id));
+                    } else {
+                        collegeScopedBatchIds.push(...assignedBatchIds);
+                    }
+
+                    if (collegeScopedBatchIds.length > 0) {
+                        const batchPlaceholders = collegeScopedBatchIds.map((_, i) => `$${params.length + i + 1}`).join(', ');
+                        conditions.push(`s.batch_id IN (${batchPlaceholders})`);
+                        params.push(...collegeScopedBatchIds);
+                    }
+                }
+            } else if (batch_id) {
+                // No assigned batches but explicit batch_id filter passed
+                conditions.push(`s.batch_id = $${params.length + 1}`);
+                params.push(batch_id);
+            }
+        } else {
+            if (college_id) {
+                conditions.push(`s.college_id = $${params.length + 1}`);
+                params.push(college_id);
+            }
+            if (batch_id) {
+                conditions.push(`s.batch_id = $${params.length + 1}`);
+                params.push(batch_id);
+            }
         }
 
-        query += ' GROUP BY s.id, c.name ORDER BY s.name';
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+
+        query += ' GROUP BY s.id, c.name, b.batch_name ORDER BY s.name';
         const result = await pool.query(query, params);
         res.json(result.rows);
     } catch (err) {
