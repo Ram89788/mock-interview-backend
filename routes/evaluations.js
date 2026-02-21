@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../config/db');
 const nodemailer = require('nodemailer');
+const XLSX = require('xlsx');
 const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
@@ -32,6 +33,147 @@ router.get('/', authMiddleware, async (req, res) => {
     } catch (err) {
         console.error('Get evaluations error:', err);
         res.status(500).json({ error: 'Server error.' });
+    }
+});
+
+// ============================================
+// GET /api/evaluations/download - Download reports as Excel
+// Query params: ?college_id=X  and/or  ?interviewer_id=X
+// ============================================
+router.get('/download', authMiddleware, async (req, res) => {
+    try {
+        const { college_id, interviewer_id } = req.query;
+
+        let query = `
+            SELECT e.*, 
+                   s.name as student_name, s.email as student_email,
+                   s.phone as student_phone,
+                   s.branch as student_branch, s.year as student_year,
+                   c.name as college_name, c.id as college_id,
+                   u.name as interviewer_name
+            FROM evaluations e
+            JOIN students s ON e.student_id = s.id
+            JOIN colleges c ON s.college_id = c.id
+            LEFT JOIN users u ON e.interviewer_id = u.id
+        `;
+        const conditions = [];
+        const params = [];
+        let paramIdx = 1;
+
+        // Interviewers can only download their own evaluations
+        if (req.user.role === 'interviewer') {
+            conditions.push(`e.interviewer_id = $${paramIdx++}`);
+            params.push(req.user.id);
+        } else if (interviewer_id) {
+            conditions.push(`e.interviewer_id = $${paramIdx++}`);
+            params.push(interviewer_id);
+        }
+
+        if (college_id) {
+            conditions.push(`s.college_id = $${paramIdx++}`);
+            params.push(college_id);
+        }
+
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+
+        query += ' ORDER BY c.name, s.name, e.created_at DESC';
+
+        const result = await pool.query(query, params);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'No evaluations found for the given filters.' });
+        }
+
+        // ---- Build Summary Sheet ----
+        const summaryData = result.rows.map((r, i) => ({
+            'S.No': i + 1,
+            'Student Name': r.student_name,
+            'Email': r.student_email,
+            'Phone': r.student_phone || '',
+            'College': r.college_name,
+            'Branch': r.student_branch || '',
+            'Year': r.student_year || '',
+            'Interviewer': r.interviewer_name || 'N/A',
+            'Total Score': r.total_score,
+            'Out Of': 100,
+            'Percentage': `${r.total_score}%`,
+            'Recommendation': r.recommendation,
+            'Date': new Date(r.created_at).toLocaleDateString('en-IN'),
+        }));
+
+        const summarySheet = XLSX.utils.json_to_sheet(summaryData);
+        summarySheet['!cols'] = [
+            { wch: 5 }, { wch: 22 }, { wch: 26 }, { wch: 14 },
+            { wch: 22 }, { wch: 22 }, { wch: 10 }, { wch: 18 },
+            { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 20 }, { wch: 12 },
+        ];
+
+        // ---- Build Detailed Scores Sheet ----
+        const detailedData = result.rows.map((r, i) => ({
+            'S.No': i + 1,
+            'Student Name': r.student_name,
+            'College': r.college_name,
+            'Self Intro (5)': r.score_self_intro,
+            'Communication (5)': r.score_communication,
+            'Confidence (5)': r.score_confidence,
+            'Programming (10)': r.score_programming,
+            'OOP (10)': r.score_oops,
+            'DSA (10)': r.score_dsa,
+            'Core Subject (10)': r.score_core_subject,
+            'Logical (10)': r.score_logical,
+            'Approach (10)': r.score_approach,
+            'HR Handling (10)': r.score_hr_handling,
+            'Strengths (5)': r.score_strengths,
+            'Attitude (5)': r.score_attitude,
+            'Career (5)': r.score_career,
+            'Total (100)': r.total_score,
+            'Recommendation': r.recommendation,
+            'Strengths Feedback': r.strengths_text || '',
+            'Improvements': r.improvements || '',
+            'Comments': r.comments || '',
+        }));
+
+        const detailedSheet = XLSX.utils.json_to_sheet(detailedData);
+        detailedSheet['!cols'] = [
+            { wch: 5 }, { wch: 22 }, { wch: 22 },
+            { wch: 13 }, { wch: 17 }, { wch: 14 },
+            { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 16 },
+            { wch: 12 }, { wch: 14 },
+            { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 11 },
+            { wch: 12 }, { wch: 20 },
+            { wch: 30 }, { wch: 30 }, { wch: 30 },
+        ];
+
+        // ---- Build the workbook ----
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+        XLSX.utils.book_append_sheet(wb, detailedSheet, 'Detailed Scores');
+
+        // Decide filename
+        let filenameLabel = 'All_Reports';
+        if (college_id) {
+            const collegeName = result.rows[0]?.college_name || `College_${college_id}`;
+            filenameLabel = collegeName.replace(/[^a-zA-Z0-9]/g, '_');
+        }
+        if (interviewer_id) {
+            const intName = result.rows[0]?.interviewer_name || `Interviewer_${interviewer_id}`;
+            filenameLabel += `_by_${intName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        }
+        if (req.user.role === 'interviewer') {
+            filenameLabel = `My_Reports`;
+        }
+
+        const filename = `CRT_Evaluation_${filenameLabel}.xlsx`;
+
+        const xlsxBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(xlsxBuffer);
+    } catch (err) {
+        console.error('Download report error:', err);
+        res.status(500).json({ error: 'Failed to generate report.' });
     }
 });
 
