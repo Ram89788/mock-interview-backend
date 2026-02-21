@@ -36,7 +36,7 @@ router.get('/admin', authMiddleware, adminOnly, async (req, res) => {
                     END as recommendation_type,
                     COUNT(*) as count
                 FROM evaluations
-                GROUP BY recommendation_type
+                GROUP BY 1
                 ORDER BY count DESC
             `),
             // Performance per college
@@ -158,7 +158,7 @@ router.get('/college/:id', authMiddleware, async (req, res) => {
                 FROM evaluations e
                 JOIN students s ON e.student_id = s.id
                 WHERE s.college_id = $1
-                GROUP BY recommendation_type
+                GROUP BY 1
                 ORDER BY count DESC
             `, [collegeId]),
             // Batch-wise performance

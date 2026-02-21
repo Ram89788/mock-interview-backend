@@ -31,7 +31,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
                         END as recommendation_type,
                         COUNT(*) as count
                     FROM evaluations
-                    GROUP BY recommendation_type
+                    GROUP BY 1
                 `),
             ]);
 
@@ -70,7 +70,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
                     FROM evaluations e
                     JOIN students s ON e.student_id = s.id
                     WHERE s.college_id = $1
-                    GROUP BY recommendation_type
+                    GROUP BY 1
                 `, [collegeId]),
                 pool.query(`
                     SELECT e.id, e.total_score, e.recommendation, e.created_at,
