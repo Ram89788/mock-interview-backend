@@ -86,9 +86,12 @@ router.get('/', authMiddleware, async (req, res) => {
     try {
         const { college_id } = req.query;
         let query = `
-            SELECT s.*, c.name as college_name 
+            SELECT s.*, c.name as college_name,
+                   CASE WHEN COUNT(e.id) > 0 THEN true ELSE false END as is_evaluated,
+                   COUNT(e.id)::int as evaluation_count
             FROM students s 
             JOIN colleges c ON s.college_id = c.id
+            LEFT JOIN evaluations e ON e.student_id = s.id
         `;
         const params = [];
 
@@ -119,7 +122,7 @@ router.get('/', authMiddleware, async (req, res) => {
             params.push(college_id);
         }
 
-        query += ' ORDER BY s.name';
+        query += ' GROUP BY s.id, c.name ORDER BY s.name';
         const result = await pool.query(query, params);
         res.json(result.rows);
     } catch (err) {
