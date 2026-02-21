@@ -64,6 +64,14 @@ async function seed() {
         }
         console.log('  ✅ Interviewers seeded with multi-college assignments (password: interviewer123)');
 
+        // 3b. Seed College User (for college login)
+        const collegePassword = await bcrypt.hash('college123', 10);
+        await client.query(
+            "INSERT INTO users (name, email, password, role, assigned_college_id) VALUES ($1, $2, $3, 'college', $4)",
+            ['JNTU Admin', 'jntu@crt.com', collegePassword, 1]
+        );
+        console.log('  ✅ College user seeded (jntu@crt.com / college123 → JNTU Hyderabad)');
+
         // 4. Seed Students
         const students = [
             { name: 'Arjun Patel', email: 'arjun@student.com', phone: '9876543210', collegeId: 1, branch: 'Computer Science', year: '4th Year' },
@@ -133,6 +141,7 @@ async function seed() {
         console.log('\n🎉 Database seeded successfully!');
         console.log('\n📋 Login Credentials:');
         console.log('   Admin:        admin@crt.com / admin123');
+        console.log('   College:      jntu@crt.com / college123    (JNTU Hyderabad)');
         console.log('   Interviewer:  rajesh@crt.com / interviewer123  (JNTU + VIT)');
         console.log('   Interviewer:  priya@crt.com / interviewer123   (VIT + CBIT)');
         console.log('   Interviewer:  anil@crt.com / interviewer123    (JNTU + CBIT)\n');
