@@ -54,9 +54,18 @@ router.post('/login', async (req, res) => {
         // Get assigned colleges for interviewers
         let assignedCollegeIds = [];
         let assignedColleges = [];
+        let collegeId = null;
+        let collegeName = null;
+
         if (user.role === 'interviewer') {
             assignedCollegeIds = await getAssignedCollegeIds(user.id);
             assignedColleges = await getAssignedColleges(user.id);
+        } else if (user.role === 'college') {
+            collegeId = user.assigned_college_id;
+            if (collegeId) {
+                const collegeResult = await pool.query('SELECT name FROM colleges WHERE id = $1', [collegeId]);
+                collegeName = collegeResult.rows[0]?.name || null;
+            }
         }
 
         const token = jwt.sign(
@@ -66,6 +75,7 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 name: user.name,
                 assignedCollegeIds: assignedCollegeIds,
+                collegeId: collegeId,
             },
             process.env.JWT_SECRET,
             { expiresIn: '24h' }
@@ -80,6 +90,8 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 assignedCollegeIds: assignedCollegeIds,
                 assignedColleges: assignedColleges,
+                collegeId: collegeId,
+                collegeName: collegeName,
             },
         });
     } catch (err) {
@@ -92,7 +104,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT id, name, email, role FROM users WHERE id = $1',
+            'SELECT id, name, email, role, assigned_college_id FROM users WHERE id = $1',
             [req.user.id]
         );
 
@@ -105,9 +117,18 @@ router.get('/me', authMiddleware, async (req, res) => {
         // Get assigned colleges for interviewers
         let assignedCollegeIds = [];
         let assignedColleges = [];
+        let collegeId = null;
+        let collegeName = null;
+
         if (user.role === 'interviewer') {
             assignedCollegeIds = await getAssignedCollegeIds(user.id);
             assignedColleges = await getAssignedColleges(user.id);
+        } else if (user.role === 'college') {
+            collegeId = user.assigned_college_id;
+            if (collegeId) {
+                const collegeResult = await pool.query('SELECT name FROM colleges WHERE id = $1', [collegeId]);
+                collegeName = collegeResult.rows[0]?.name || null;
+            }
         }
 
         res.json({
@@ -117,6 +138,8 @@ router.get('/me', authMiddleware, async (req, res) => {
             role: user.role,
             assignedCollegeIds: assignedCollegeIds,
             assignedColleges: assignedColleges,
+            collegeId: collegeId,
+            collegeName: collegeName,
         });
     } catch (err) {
         console.error('Get user error:', err);

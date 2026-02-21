@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/stats', authMiddleware, async (req, res) => {
     try {
         if (req.user.role === 'admin') {
-            const [collegesRes, studentsRes, interviewersRes, evaluationsRes, recentRes] = await Promise.all([
+            const [collegesRes, studentsRes, interviewersRes, evaluationsRes, recentRes, recDistRes] = await Promise.all([
                 pool.query('SELECT COUNT(*) as count FROM colleges'),
                 pool.query('SELECT COUNT(*) as count FROM students'),
                 pool.query("SELECT COUNT(*) as count FROM users WHERE role = 'interviewer'"),
@@ -22,6 +22,17 @@ router.get('/stats', authMiddleware, async (req, res) => {
                     LEFT JOIN users u ON e.interviewer_id = u.id
                     ORDER BY e.created_at DESC LIMIT 10
                 `),
+                pool.query(`
+                    SELECT 
+                        CASE 
+                            WHEN total_score >= 85 THEN 'Highly Recommended'
+                            WHEN total_score >= 70 THEN 'Recommended'
+                            ELSE 'Not Recommended'
+                        END as recommendation_type,
+                        COUNT(*) as count
+                    FROM evaluations
+                    GROUP BY recommendation_type
+                `),
             ]);
 
             res.json({
@@ -29,6 +40,58 @@ router.get('/stats', authMiddleware, async (req, res) => {
                 totalStudents: parseInt(studentsRes.rows[0].count),
                 totalInterviewers: parseInt(interviewersRes.rows[0].count),
                 totalEvaluations: parseInt(evaluationsRes.rows[0].count),
+                recentActivity: recentRes.rows,
+                recommendationDistribution: recDistRes.rows.map(r => ({
+                    name: r.recommendation_type,
+                    value: parseInt(r.count)
+                })),
+            });
+        } else if (req.user.role === 'college') {
+            // College dashboard
+            const collegeId = req.user.collegeId;
+
+            const [studentsRes, batchesRes, evaluationsRes, recDistRes, recentRes] = await Promise.all([
+                pool.query('SELECT COUNT(*) as count FROM students WHERE college_id = $1', [collegeId]),
+                pool.query('SELECT COUNT(*) as count FROM batches WHERE college_id = $1', [collegeId]),
+                pool.query(`
+                    SELECT COUNT(*) as count 
+                    FROM evaluations e 
+                    JOIN students s ON e.student_id = s.id 
+                    WHERE s.college_id = $1
+                `, [collegeId]),
+                pool.query(`
+                    SELECT 
+                        CASE 
+                            WHEN e.total_score >= 85 THEN 'Highly Recommended'
+                            WHEN e.total_score >= 70 THEN 'Recommended'
+                            ELSE 'Not Recommended'
+                        END as recommendation_type,
+                        COUNT(*) as count
+                    FROM evaluations e
+                    JOIN students s ON e.student_id = s.id
+                    WHERE s.college_id = $1
+                    GROUP BY recommendation_type
+                `, [collegeId]),
+                pool.query(`
+                    SELECT e.id, e.total_score, e.recommendation, e.created_at,
+                           s.name as student_name, c.name as college_name, u.name as interviewer_name
+                    FROM evaluations e
+                    JOIN students s ON e.student_id = s.id
+                    JOIN colleges c ON s.college_id = c.id
+                    LEFT JOIN users u ON e.interviewer_id = u.id
+                    WHERE s.college_id = $1
+                    ORDER BY e.created_at DESC LIMIT 10
+                `, [collegeId]),
+            ]);
+
+            res.json({
+                totalStudents: parseInt(studentsRes.rows[0].count),
+                totalBatches: parseInt(batchesRes.rows[0].count),
+                totalEvaluations: parseInt(evaluationsRes.rows[0].count),
+                recommendationDistribution: recDistRes.rows.map(r => ({
+                    name: r.recommendation_type,
+                    value: parseInt(r.count)
+                })),
                 recentActivity: recentRes.rows,
             });
         } else {

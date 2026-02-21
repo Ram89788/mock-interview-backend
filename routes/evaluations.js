@@ -6,25 +6,72 @@ const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/evaluations - List all evaluations
+// GET /api/evaluations - List all evaluations with filters
 router.get('/', authMiddleware, async (req, res) => {
     try {
+        const { batch_id, recommendation, college_id, score_min, score_max } = req.query;
+
         let query = `
             SELECT e.*, 
                    s.name as student_name, s.email as student_email, 
                    s.branch as student_branch, s.year as student_year,
+                   s.batch_id,
                    c.name as college_name,
-                   u.name as interviewer_name
+                   u.name as interviewer_name,
+                   b.batch_name,
+                   CASE 
+                       WHEN e.total_score >= 85 THEN 'Highly Recommended'
+                       WHEN e.total_score >= 70 THEN 'Recommended'
+                       ELSE 'Not Recommended'
+                   END as recommendation_type
             FROM evaluations e
             JOIN students s ON e.student_id = s.id
             JOIN colleges c ON s.college_id = c.id
             LEFT JOIN users u ON e.interviewer_id = u.id
+            LEFT JOIN batches b ON s.batch_id = b.id
         `;
+        const conditions = [];
         const params = [];
+        let paramIdx = 1;
 
+        // Role-based scoping
         if (req.user.role === 'interviewer') {
-            query += ' WHERE e.interviewer_id = $1';
+            conditions.push(`e.interviewer_id = $${paramIdx++}`);
             params.push(req.user.id);
+        } else if (req.user.role === 'college') {
+            conditions.push(`s.college_id = $${paramIdx++}`);
+            params.push(req.user.collegeId);
+        }
+
+        // Optional filters
+        if (college_id) {
+            conditions.push(`s.college_id = $${paramIdx++}`);
+            params.push(college_id);
+        }
+        if (batch_id) {
+            conditions.push(`s.batch_id = $${paramIdx++}`);
+            params.push(batch_id);
+        }
+        if (recommendation) {
+            if (recommendation === 'Highly Recommended') {
+                conditions.push(`e.total_score >= 85`);
+            } else if (recommendation === 'Recommended') {
+                conditions.push(`e.total_score >= 70 AND e.total_score < 85`);
+            } else if (recommendation === 'Not Recommended') {
+                conditions.push(`e.total_score < 70`);
+            }
+        }
+        if (score_min) {
+            conditions.push(`e.total_score >= $${paramIdx++}`);
+            params.push(parseInt(score_min));
+        }
+        if (score_max) {
+            conditions.push(`e.total_score <= $${paramIdx++}`);
+            params.push(parseInt(score_max));
+        }
+
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
         }
 
         query += ' ORDER BY e.created_at DESC';
@@ -225,23 +272,30 @@ router.post('/', authMiddleware, async (req, res) => {
             (score_hr_handling || 0) + (score_strengths || 0) + (score_attitude || 0) + (score_career || 0);
 
         let recommendation;
-        if (total_score >= 80) recommendation = 'Highly Recommended';
-        else if (total_score >= 60) recommendation = 'Recommended';
-        else if (total_score >= 40) recommendation = 'Needs Improvement';
-        else recommendation = 'Not Recommended';
+        let recommendation_type;
+        if (total_score >= 85) {
+            recommendation = 'Highly Recommended';
+            recommendation_type = 'Highly Recommended';
+        } else if (total_score >= 70) {
+            recommendation = 'Recommended';
+            recommendation_type = 'Recommended';
+        } else {
+            recommendation = 'Not Recommended';
+            recommendation_type = 'Not Recommended';
+        }
 
         const result = await pool.query(
             `INSERT INTO evaluations (
-                student_id, interviewer_id, total_score, recommendation,
+                student_id, interviewer_id, total_score, recommendation, recommendation_type,
                 score_self_intro, score_communication, score_confidence,
                 score_programming, score_oops, score_dsa, score_core_subject,
                 score_logical, score_approach,
                 score_hr_handling, score_strengths, score_attitude, score_career,
                 strengths_text, improvements, comments
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
             RETURNING *`,
             [
-                student_id, req.user.id, total_score, recommendation,
+                student_id, req.user.id, total_score, recommendation, recommendation_type,
                 score_self_intro || 0, score_communication || 0, score_confidence || 0,
                 score_programming || 0, score_oops || 0, score_dsa || 0, score_core_subject || 0,
                 score_logical || 0, score_approach || 0,
