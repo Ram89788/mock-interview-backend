@@ -125,7 +125,8 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
             const userId = userResult.rows[0].id;
 
             // Insert college assignments
-            for (const collegeId of assigned_college_ids) {
+            const uniqueCollegeIds = [...new Set(assigned_college_ids)];
+            for (const collegeId of uniqueCollegeIds) {
                 await client.query(
                     'INSERT INTO interviewer_colleges (user_id, college_id) VALUES ($1, $2)',
                     [userId, parseInt(collegeId)]
@@ -134,7 +135,8 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 
             // Insert batch assignments
             if (assigned_batch_ids && Array.isArray(assigned_batch_ids)) {
-                for (const batchId of assigned_batch_ids) {
+                const uniqueBatchIds = [...new Set(assigned_batch_ids)];
+                for (const batchId of uniqueBatchIds) {
                     await client.query(
                         'INSERT INTO interviewer_batches (user_id, batch_id) VALUES ($1, $2)',
                         [userId, parseInt(batchId)]
@@ -213,7 +215,8 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
                 // Remove existing assignments
                 await client.query('DELETE FROM interviewer_colleges WHERE user_id = $1', [userId]);
                 // Insert new ones
-                for (const collegeId of assigned_college_ids) {
+                const uniqueCollegeIds = [...new Set(assigned_college_ids)];
+                for (const collegeId of uniqueCollegeIds) {
                     await client.query(
                         'INSERT INTO interviewer_colleges (user_id, college_id) VALUES ($1, $2)',
                         [userId, parseInt(collegeId)]
@@ -226,7 +229,8 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
                 // Remove existing batch assignments
                 await client.query('DELETE FROM interviewer_batches WHERE user_id = $1', [userId]);
                 // Insert new ones
-                for (const batchId of assigned_batch_ids) {
+                const uniqueBatchIds = [...new Set(assigned_batch_ids)];
+                for (const batchId of uniqueBatchIds) {
                     await client.query(
                         'INSERT INTO interviewer_batches (user_id, batch_id) VALUES ($1, $2)',
                         [userId, parseInt(batchId)]

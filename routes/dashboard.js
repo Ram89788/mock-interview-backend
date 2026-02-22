@@ -23,15 +23,17 @@ router.get('/stats', authMiddleware, async (req, res) => {
                     ORDER BY e.created_at DESC LIMIT 10
                 `),
                 pool.query(`
-                    SELECT 
-                        CASE 
-                            WHEN total_score >= 85 THEN 'Highly Recommended'
-                            WHEN total_score >= 70 THEN 'Recommended'
-                            ELSE 'Not Recommended'
-                        END as recommendation_type,
-                        COUNT(*) as count
-                    FROM evaluations
-                    GROUP BY 1
+                    SELECT recommendation_type, COUNT(*) as count
+                    FROM (
+                        SELECT 
+                            CASE 
+                                WHEN total_score >= 85 THEN 'Highly Recommended'
+                                WHEN total_score >= 70 THEN 'Recommended'
+                                ELSE 'Not Recommended'
+                            END as recommendation_type
+                        FROM evaluations
+                    ) sub
+                    GROUP BY recommendation_type
                 `),
             ]);
 
@@ -60,17 +62,19 @@ router.get('/stats', authMiddleware, async (req, res) => {
                     WHERE s.college_id = $1
                 `, [collegeId]),
                 pool.query(`
-                    SELECT 
-                        CASE 
-                            WHEN e.total_score >= 85 THEN 'Highly Recommended'
-                            WHEN e.total_score >= 70 THEN 'Recommended'
-                            ELSE 'Not Recommended'
-                        END as recommendation_type,
-                        COUNT(*) as count
-                    FROM evaluations e
-                    JOIN students s ON e.student_id = s.id
-                    WHERE s.college_id = $1
-                    GROUP BY 1
+                    SELECT recommendation_type, COUNT(*) as count
+                    FROM (
+                        SELECT 
+                            CASE 
+                                WHEN e.total_score >= 85 THEN 'Highly Recommended'
+                                WHEN e.total_score >= 70 THEN 'Recommended'
+                                ELSE 'Not Recommended'
+                            END as recommendation_type
+                        FROM evaluations e
+                        JOIN students s ON e.student_id = s.id
+                        WHERE s.college_id = $1
+                    ) sub
+                    GROUP BY recommendation_type
                 `, [collegeId]),
                 pool.query(`
                     SELECT e.id, e.total_score, e.recommendation, e.created_at,

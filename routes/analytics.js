@@ -28,15 +28,17 @@ router.get('/admin', authMiddleware, adminOnly, async (req, res) => {
             `),
             // Recommendation distribution
             pool.query(`
-                SELECT 
-                    CASE 
-                        WHEN total_score >= 85 THEN 'Highly Recommended'
-                        WHEN total_score >= 70 THEN 'Recommended'
-                        ELSE 'Not Recommended'
-                    END as recommendation_type,
-                    COUNT(*) as count
-                FROM evaluations
-                GROUP BY 1
+                SELECT recommendation_type, COUNT(*) as count
+                FROM (
+                    SELECT 
+                        CASE 
+                            WHEN total_score >= 85 THEN 'Highly Recommended'
+                            WHEN total_score >= 70 THEN 'Recommended'
+                            ELSE 'Not Recommended'
+                        END as recommendation_type
+                    FROM evaluations
+                ) sub
+                GROUP BY recommendation_type
                 ORDER BY count DESC
             `),
             // Performance per college
@@ -148,17 +150,19 @@ router.get('/college/:id', authMiddleware, async (req, res) => {
             `, [collegeId]),
             // Recommendation distribution for this college
             pool.query(`
-                SELECT 
-                    CASE 
-                        WHEN e.total_score >= 85 THEN 'Highly Recommended'
-                        WHEN e.total_score >= 70 THEN 'Recommended'
-                        ELSE 'Not Recommended'
-                    END as recommendation_type,
-                    COUNT(*) as count
-                FROM evaluations e
-                JOIN students s ON e.student_id = s.id
-                WHERE s.college_id = $1
-                GROUP BY 1
+                SELECT recommendation_type, COUNT(*) as count
+                FROM (
+                    SELECT 
+                        CASE 
+                            WHEN e.total_score >= 85 THEN 'Highly Recommended'
+                            WHEN e.total_score >= 70 THEN 'Recommended'
+                            ELSE 'Not Recommended'
+                        END as recommendation_type
+                    FROM evaluations e
+                    JOIN students s ON e.student_id = s.id
+                    WHERE s.college_id = $1
+                ) sub
+                GROUP BY recommendation_type
                 ORDER BY count DESC
             `, [collegeId]),
             // Batch-wise performance
@@ -199,19 +203,21 @@ router.get('/college/:id', authMiddleware, async (req, res) => {
             `, [collegeId]),
             // Score distribution brackets
             pool.query(`
-                SELECT 
-                    CASE 
-                        WHEN e.total_score >= 90 THEN '90-100'
-                        WHEN e.total_score >= 80 THEN '80-89'
-                        WHEN e.total_score >= 70 THEN '70-79'
-                        WHEN e.total_score >= 60 THEN '60-69'
-                        WHEN e.total_score >= 50 THEN '50-59'
-                        ELSE 'Below 50'
-                    END as score_range,
-                    COUNT(*) as count
-                FROM evaluations e
-                JOIN students s ON e.student_id = s.id
-                WHERE s.college_id = $1
+                SELECT score_range, COUNT(*) as count
+                FROM (
+                    SELECT 
+                        CASE 
+                            WHEN e.total_score >= 90 THEN '90-100'
+                            WHEN e.total_score >= 80 THEN '80-89'
+                            WHEN e.total_score >= 70 THEN '70-79'
+                            WHEN e.total_score >= 60 THEN '60-69'
+                            WHEN e.total_score >= 50 THEN '50-59'
+                            ELSE 'Below 50'
+                        END as score_range
+                    FROM evaluations e
+                    JOIN students s ON e.student_id = s.id
+                    WHERE s.college_id = $1
+                ) sub
                 GROUP BY score_range
                 ORDER BY score_range
             `, [collegeId])
