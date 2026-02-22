@@ -149,7 +149,7 @@ router.post('/:id/create-login', authMiddleware, adminOnly, async (req, res) => 
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const loginName = name || `${collegeResult.rows[0].name} Admin`;
+        const loginName = name || collegeResult.rows[0].name;
 
         const result = await pool.query(
             `INSERT INTO users (name, email, password, role, assigned_college_id)

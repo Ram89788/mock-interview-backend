@@ -261,14 +261,14 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // ============================================
 router.post('/', authMiddleware, adminOnly, async (req, res) => {
     try {
-        const { name, email, phone, college_id, branch, year } = req.body;
+        const { name, email, phone, college_id, branch, year, batch_id } = req.body;
         if (!name || !email || !college_id) {
             return res.status(400).json({ error: 'Name, email, and college are required.' });
         }
         const result = await pool.query(
-            `INSERT INTO students (name, email, phone, college_id, branch, year) 
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [name, email, phone || null, college_id, branch || null, year || null]
+            `INSERT INTO students (name, email, phone, college_id, branch, year, batch_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [name, email, phone || null, college_id, branch || null, year || null, batch_id || null]
         );
 
         const student = await pool.query(
@@ -317,6 +317,10 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
             });
         }
 
+        // ---- Fixed College/Batch from request ----
+        const fixedCollegeId = req.body.college_id ? parseInt(req.body.college_id) : null;
+        const fixedBatchId = req.body.batch_id ? parseInt(req.body.batch_id) : null;
+
         // ---- Build a college-name → id lookup ----
         const collegesResult = await pool.query('SELECT id, name FROM colleges');
         const collegeMap = {};
@@ -338,21 +342,25 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
             const phone = (row.phone || '').trim() || null;
             const branch = (row.branch || '').trim() || null;
             const year = (row.year || '').trim() || null;
+            const batch_id = row.batch_id ? parseInt(row.batch_id) : null;
 
-            // Resolve college: prefer college_id, fall back to college_name
-            let collegeId = null;
-            if (row.college_id) {
+            // Resolve college: prefer fixedCollegeId, then row.college_id, fall back to college_name
+            let collegeId = fixedCollegeId;
+            if (!collegeId && row.college_id) {
                 collegeId = parseInt(row.college_id);
                 if (isNaN(collegeId)) {
                     rowErrors.push('Invalid college_id');
                     collegeId = null;
                 }
-            } else if (row.college_name) {
+            } else if (!collegeId && row.college_name) {
                 collegeId = collegeMap[row.college_name.toLowerCase().trim()] || null;
                 if (!collegeId) {
                     rowErrors.push(`College "${row.college_name}" not found`);
                 }
             }
+
+            // Resolve batch: prefer fixedBatchId, then row.batch_id
+            const resolvedBatchId = fixedBatchId || (row.batch_id ? parseInt(row.batch_id) : null);
 
             if (!name) rowErrors.push('Name is required');
             if (!email) rowErrors.push('Email is required');
@@ -366,7 +374,7 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
             if (rowErrors.length > 0) {
                 errors.push({ row: rowNum, name: name || '(empty)', email: email || '(empty)', errors: rowErrors });
             } else {
-                validStudents.push({ name, email, phone, college_id: collegeId, branch, year });
+                validStudents.push({ name, email, phone, college_id: collegeId, branch, year, batch_id: resolvedBatchId });
             }
         }
 
@@ -383,9 +391,9 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
                     const s = validStudents[i];
                     try {
                         const result = await client.query(
-                            `INSERT INTO students (name, email, phone, college_id, branch, year) 
-                             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-                            [s.name, s.email, s.phone, s.college_id, s.branch, s.year]
+                            `INSERT INTO students (name, email, phone, college_id, branch, year, batch_id) 
+                             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                            [s.name, s.email, s.phone, s.college_id, s.branch, s.year, s.batch_id]
                         );
                         inserted.push(result.rows[0]);
                     } catch (insertErr) {
@@ -433,7 +441,7 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
 // ============================================
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
     try {
-        const { name, email, phone, college_id, branch, year } = req.body;
+        const { name, email, phone, college_id, branch, year, batch_id } = req.body;
         const result = await pool.query(
             `UPDATE students SET 
                 name = COALESCE($1, name), 
@@ -442,9 +450,10 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
                 college_id = COALESCE($4, college_id), 
                 branch = COALESCE($5, branch), 
                 year = COALESCE($6, year),
+                batch_id = COALESCE($7, batch_id),
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $7 RETURNING *`,
-            [name, email, phone, college_id, branch, year, req.params.id]
+             WHERE id = $8 RETURNING *`,
+            [name, email, phone, college_id, branch, year, batch_id, req.params.id]
         );
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Student not found.' });

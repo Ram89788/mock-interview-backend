@@ -60,7 +60,7 @@ router.post('/login', async (req, res) => {
         }
 
         const result = await pool.query(
-            'SELECT * FROM users WHERE email = $1',
+            'SELECT * FROM users WHERE email = $1 OR (role = \'college\' AND name = $1)',
             [email]
         );
 
