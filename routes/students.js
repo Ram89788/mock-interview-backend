@@ -442,18 +442,29 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
     try {
         const { name, email, phone, college_id, branch, year, batch_id } = req.body;
+
+        // We check what was actually provided in the body to allow setting values to NULL
+        const updates = [];
+        const params = [];
+
+        if (name !== undefined) { updates.push(`name = $${updates.length + 1}`); params.push(name); }
+        if (email !== undefined) { updates.push(`email = $${updates.length + 1}`); params.push(email); }
+        if (phone !== undefined) { updates.push(`phone = $${updates.length + 1}`); params.push(phone); }
+        if (college_id !== undefined) { updates.push(`college_id = $${updates.length + 1}`); params.push(college_id); }
+        if (branch !== undefined) { updates.push(`branch = $${updates.length + 1}`); params.push(branch); }
+        if (year !== undefined) { updates.push(`year = $${updates.length + 1}`); params.push(year); }
+        if (batch_id !== undefined) { updates.push(`batch_id = $${updates.length + 1}`); params.push(batch_id); }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ error: 'No fields provided for update.' });
+        }
+
+        updates.push(`updated_at = CURRENT_TIMESTAMP`);
+        params.push(req.params.id);
+
         const result = await pool.query(
-            `UPDATE students SET 
-                name = COALESCE($1, name), 
-                email = COALESCE($2, email), 
-                phone = COALESCE($3, phone), 
-                college_id = COALESCE($4, college_id), 
-                branch = COALESCE($5, branch), 
-                year = COALESCE($6, year),
-                batch_id = COALESCE($7, batch_id),
-                updated_at = CURRENT_TIMESTAMP
-             WHERE id = $8 RETURNING *`,
-            [name, email, phone, college_id, branch, year, batch_id, req.params.id]
+            `UPDATE students SET ${updates.join(', ')} WHERE id = $${params.length} RETURNING *`,
+            params
         );
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Student not found.' });
