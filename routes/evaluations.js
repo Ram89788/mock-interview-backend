@@ -89,43 +89,57 @@ router.get('/', authMiddleware, async (req, res) => {
 // ============================================
 router.get('/download', authMiddleware, async (req, res) => {
     try {
-        const { college_id, interviewer_id } = req.query;
+        const { college_id, interviewer_id, batch_id } = req.query;
 
         let query = `
             SELECT e.*, 
                    s.name as student_name, s.email as student_email,
                    s.phone as student_phone,
                    s.branch as student_branch, s.year as student_year,
+                   s.batch_id,
                    c.name as college_name, c.id as college_id,
-                   u.name as interviewer_name
+                   u.name as interviewer_name,
+                   b.batch_name
             FROM evaluations e
             JOIN students s ON e.student_id = s.id
             JOIN colleges c ON s.college_id = c.id
             LEFT JOIN users u ON e.interviewer_id = u.id
+            LEFT JOIN batches b ON s.batch_id = b.id
         `;
         const conditions = [];
         const params = [];
         let paramIdx = 1;
 
-        // Interviewers can only download their own evaluations
+        // Role-based scoping
         if (req.user.role === 'interviewer') {
             conditions.push(`e.interviewer_id = $${paramIdx++}`);
             params.push(req.user.id);
-        } else if (interviewer_id) {
+        } else if (req.user.role === 'college') {
+            // College users can only download their own college data
+            conditions.push(`s.college_id = $${paramIdx++}`);
+            params.push(req.user.collegeId);
+        }
+
+        if (interviewer_id && req.user.role !== 'interviewer') {
             conditions.push(`e.interviewer_id = $${paramIdx++}`);
             params.push(interviewer_id);
         }
 
-        if (college_id) {
+        if (college_id && req.user.role !== 'college') {
             conditions.push(`s.college_id = $${paramIdx++}`);
             params.push(college_id);
+        }
+
+        if (batch_id) {
+            conditions.push(`s.batch_id = $${paramIdx++}`);
+            params.push(batch_id);
         }
 
         if (conditions.length > 0) {
             query += ' WHERE ' + conditions.join(' AND ');
         }
 
-        query += ' ORDER BY c.name, s.name, e.created_at DESC';
+        query += ' ORDER BY c.name, COALESCE(b.batch_name, \'\'), s.name, e.created_at DESC';
 
         const result = await pool.query(query, params);
 
@@ -140,6 +154,7 @@ router.get('/download', authMiddleware, async (req, res) => {
             'Email': r.student_email,
             'Phone': r.student_phone || '',
             'College': r.college_name,
+            'Batch': r.batch_name || 'N/A',
             'Branch': r.student_branch || '',
             'Year': r.student_year || '',
             'Interviewer': r.interviewer_name || 'N/A',
@@ -153,7 +168,7 @@ router.get('/download', authMiddleware, async (req, res) => {
         const summarySheet = XLSX.utils.json_to_sheet(summaryData);
         summarySheet['!cols'] = [
             { wch: 5 }, { wch: 22 }, { wch: 26 }, { wch: 14 },
-            { wch: 22 }, { wch: 22 }, { wch: 10 }, { wch: 18 },
+            { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 10 }, { wch: 18 },
             { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 20 }, { wch: 12 },
         ];
 
@@ -162,6 +177,7 @@ router.get('/download', authMiddleware, async (req, res) => {
             'S.No': i + 1,
             'Student Name': r.student_name,
             'College': r.college_name,
+            'Batch': r.batch_name || 'N/A',
             'Self Intro (5)': r.score_self_intro,
             'Communication (5)': r.score_communication,
             'Confidence (5)': r.score_confidence,
@@ -184,7 +200,7 @@ router.get('/download', authMiddleware, async (req, res) => {
 
         const detailedSheet = XLSX.utils.json_to_sheet(detailedData);
         detailedSheet['!cols'] = [
-            { wch: 5 }, { wch: 22 }, { wch: 22 },
+            { wch: 5 }, { wch: 22 }, { wch: 22 }, { wch: 18 },
             { wch: 13 }, { wch: 17 }, { wch: 14 },
             { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 16 },
             { wch: 12 }, { wch: 14 },
@@ -200,7 +216,10 @@ router.get('/download', authMiddleware, async (req, res) => {
 
         // Decide filename
         let filenameLabel = 'All_Reports';
-        if (college_id) {
+        if (req.user.role === 'college') {
+            const collegeName = result.rows[0]?.college_name || 'College';
+            filenameLabel = collegeName.replace(/[^a-zA-Z0-9]/g, '_');
+        } else if (college_id) {
             const collegeName = result.rows[0]?.college_name || `College_${college_id}`;
             filenameLabel = collegeName.replace(/[^a-zA-Z0-9]/g, '_');
         }
@@ -208,8 +227,16 @@ router.get('/download', authMiddleware, async (req, res) => {
             const intName = result.rows[0]?.interviewer_name || `Interviewer_${interviewer_id}`;
             filenameLabel += `_by_${intName.replace(/[^a-zA-Z0-9]/g, '_')}`;
         }
+        if (batch_id) {
+            const batchName = result.rows[0]?.batch_name || `Batch_${batch_id}`;
+            filenameLabel += `_${batchName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        }
         if (req.user.role === 'interviewer') {
             filenameLabel = `My_Reports`;
+            if (batch_id) {
+                const batchName = result.rows[0]?.batch_name || `Batch_${batch_id}`;
+                filenameLabel += `_${batchName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            }
         }
 
         const filename = `CRT_Evaluation_${filenameLabel}.xlsx`;
