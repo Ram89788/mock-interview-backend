@@ -15,7 +15,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
                 pool.query('SELECT COUNT(*) as count FROM evaluations'),
                 pool.query(`
                     SELECT e.id, e.total_score, e.recommendation, e.created_at,
-                           s.name as student_name, c.name as college_name, u.name as interviewer_name
+                           s.name as student_name, s.batch_id, c.name as college_name, u.name as interviewer_name
                     FROM evaluations e
                     JOIN students s ON e.student_id = s.id
                     JOIN colleges c ON s.college_id = c.id
@@ -78,7 +78,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
                 `, [collegeId]),
                 pool.query(`
                     SELECT e.id, e.total_score, e.recommendation, e.created_at,
-                           s.name as student_name, c.name as college_name, u.name as interviewer_name
+                           s.name as student_name, s.batch_id, c.name as college_name, u.name as interviewer_name
                     FROM evaluations e
                     JOIN students s ON e.student_id = s.id
                     JOIN colleges c ON s.college_id = c.id
@@ -132,7 +132,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
                     [req.user.id]
                 ),
                 pool.query(
-                    `SELECT s.id, s.name, s.email, s.branch, s.year, c.name as college_name,
+                    `SELECT s.id, s.name, s.email, s.branch, s.year, s.batch_id, c.name as college_name,
                             CASE WHEN e.id IS NOT NULL THEN 'Completed' ELSE 'Pending' END as status
                      FROM students s
                      JOIN colleges c ON s.college_id = c.id
