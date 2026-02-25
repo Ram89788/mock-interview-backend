@@ -52,6 +52,9 @@ function normalizeHeader(header) {
         'stream': 'branch',
         'specialization': 'branch',
         'year_of_study': 'year',
+        'batch': 'batch_name',
+        'batch_name': 'batch_name',
+        'batch_id': 'batch_id',
     };
     return map[h] || h;
 }
@@ -198,8 +201,8 @@ router.get('/template', authMiddleware, adminOnly, (req, res) => {
         const format = (req.query.format || 'xlsx').toLowerCase();
 
         const sampleData = [
-            { Name: 'John Doe', Email: 'john@example.com', Phone: '9876543210', College: 'VIT University', Branch: 'Computer Science', Year: '4th Year' },
-            { Name: 'Jane Smith', Email: 'jane@example.com', Phone: '9876543211', College: 'JNTU Hyderabad', Branch: 'Electronics', Year: '3rd Year' },
+            { Name: 'John Doe', Email: 'john@example.com', Phone: '9876543210', College: 'VIT University', Branch: 'Computer Science', Year: '4th Year', Batch: 'Batch A' },
+            { Name: 'Jane Smith', Email: 'jane@example.com', Phone: '9876543211', College: 'JNTU Hyderabad', Branch: 'Electronics', Year: '3rd Year', Batch: 'Batch B' },
         ];
 
         const ws = XLSX.utils.json_to_sheet(sampleData);
@@ -212,6 +215,7 @@ router.get('/template', authMiddleware, adminOnly, (req, res) => {
             { wch: 25 }, // College
             { wch: 25 }, // Branch
             { wch: 12 }, // Year
+            { wch: 20 }, // Batch
         ];
 
         const wb = XLSX.utils.book_new();
@@ -328,6 +332,13 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
             collegeMap[c.name.toLowerCase().trim()] = c.id;
         }
 
+        // ---- Build a batch-name → id lookup (keyed by college_id + batch_name) ----
+        const batchesResult = await pool.query('SELECT id, batch_name, college_id FROM batches');
+        const batchMap = {}; // key: "collegeId|batchName" → batch id
+        for (const b of batchesResult.rows) {
+            batchMap[`${b.college_id}|${b.batch_name.toLowerCase().trim()}`] = b.id;
+        }
+
         // ---- Validate & prepare rows ----
         const errors = [];
         const validStudents = [];
@@ -342,7 +353,6 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
             const phone = (row.phone || '').trim() || null;
             const branch = (row.branch || '').trim() || null;
             const year = (row.year || '').trim() || null;
-            const batch_id = row.batch_id ? parseInt(row.batch_id) : null;
 
             // Resolve college: prefer fixedCollegeId, then row.college_id, fall back to college_name
             let collegeId = fixedCollegeId;
@@ -359,8 +369,21 @@ router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (re
                 }
             }
 
-            // Resolve batch: prefer fixedBatchId, then row.batch_id
-            const resolvedBatchId = fixedBatchId || (row.batch_id ? parseInt(row.batch_id) : null);
+            // Resolve batch: prefer fixedBatchId, then row.batch_id, then batch_name lookup
+            let resolvedBatchId = fixedBatchId;
+            if (!resolvedBatchId && row.batch_id) {
+                resolvedBatchId = parseInt(row.batch_id);
+                if (isNaN(resolvedBatchId)) {
+                    rowErrors.push('Invalid batch_id');
+                    resolvedBatchId = null;
+                }
+            } else if (!resolvedBatchId && row.batch_name && collegeId) {
+                const batchKey = `${collegeId}|${row.batch_name.toLowerCase().trim()}`;
+                resolvedBatchId = batchMap[batchKey] || null;
+                if (!resolvedBatchId) {
+                    rowErrors.push(`Batch "${row.batch_name}" not found for this college`);
+                }
+            }
 
             if (!name) rowErrors.push('Name is required');
             if (!email) rowErrors.push('Email is required');
