@@ -6,164 +6,155 @@ const router = express.Router();
 
 // ============================================
 // POST /api/compare-performance
-// Compare student performance across multiple interview dates
-// Body: { college_id, batch_id, dates: ["2026-04-01", "2026-04-15", ...] }
+// Compare student performance across multiple batches
+// Body: { college_id, batch_ids: [1, 2, 3, ...] }
 // ============================================
 router.post('/', authMiddleware, adminOnly, async (req, res) => {
     try {
-        const { college_id, batch_id, dates } = req.body;
+        const { college_id, batch_ids } = req.body;
 
         // --- Validation ---
         if (!college_id) {
             return res.status(400).json({ error: 'College is required.' });
         }
-        if (!batch_id) {
-            return res.status(400).json({ error: 'Batch is required.' });
-        }
-        if (!dates || !Array.isArray(dates) || dates.length < 2) {
-            return res.status(400).json({ error: 'At least 2 dates are required for comparison.' });
+        if (!batch_ids || !Array.isArray(batch_ids) || batch_ids.length < 2) {
+            return res.status(400).json({ error: 'At least 2 batches are required for comparison.' });
         }
 
-        // Validate date format (YYYY-MM-DD)
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        for (const d of dates) {
-            if (!dateRegex.test(d)) {
-                return res.status(400).json({ error: `Invalid date format: ${d}. Use YYYY-MM-DD.` });
-            }
+        // Get batch info for the selected batches
+        const batchPlaceholders = batch_ids.map((_, i) => `$${i + 2}`).join(', ');
+        const batchInfoResult = await pool.query(
+            `SELECT id, batch_name FROM batches 
+             WHERE college_id = $1 AND id IN (${batchPlaceholders})
+             ORDER BY batch_name`,
+            [college_id, ...batch_ids]
+        );
+
+        if (batchInfoResult.rows.length < 2) {
+            return res.status(400).json({ error: 'At least 2 valid batches are required.' });
         }
 
-        // Sort dates chronologically
-        const sortedDates = [...dates].sort();
+        const batchInfo = batchInfoResult.rows;
+        const validBatchIds = batchInfo.map(b => b.id);
 
-        // Build date conditions: for each date, match evaluations created on that day
-        // We use DATE(e.created_at) to extract the date portion
-        const datePlaceholders = sortedDates.map((_, i) => `$${i + 3}`).join(', ');
-
-        const query = `
+        // For each batch, get students and their evaluation scores
+        // We'll get all evaluations for students in the selected batches
+        const evalPlaceholders = validBatchIds.map((_, i) => `$${i + 2}`).join(', ');
+        const evalQuery = `
             SELECT 
                 s.email,
                 s.name as student_name,
+                s.batch_id,
                 e.total_score,
-                DATE(e.created_at) as eval_date,
-                e.id as evaluation_id,
                 e.created_at
-            FROM evaluations e
-            JOIN students s ON e.student_id = s.id
+            FROM students s
+            LEFT JOIN evaluations e ON e.student_id = s.id
             WHERE s.college_id = $1
-              AND s.batch_id = $2
-              AND DATE(e.created_at) IN (${datePlaceholders})
-            ORDER BY s.email, e.created_at
+              AND s.batch_id IN (${evalPlaceholders})
+            ORDER BY s.email, s.batch_id, e.created_at DESC
         `;
 
-        const params = [college_id, batch_id, ...sortedDates];
-        const result = await pool.query(query, params);
+        const evalResult = await pool.query(evalQuery, [college_id, ...validBatchIds]);
 
-        // --- Group by student email ---
-        // For each student, collect scores per date.
-        // If a student has multiple evaluations on the same date, take the latest one.
+        // Group data by student email
         const studentMap = new Map();
 
-        for (const row of result.rows) {
+        for (const row of evalResult.rows) {
             const email = row.email;
-            const dateStr = new Date(row.eval_date).toISOString().split('T')[0];
 
             if (!studentMap.has(email)) {
                 studentMap.set(email, {
                     email,
                     name: row.student_name,
-                    scores: {},
-                    _timestamps: {}, // track created_at to resolve duplicates
+                    batches: {},      // { batchId: { scores: [], batchName: '' } }
                 });
             }
 
             const student = studentMap.get(email);
+            const batchId = row.batch_id;
 
-            // If duplicate date, keep the one with the latest created_at 
-            const existingTimestamp = student._timestamps[dateStr];
-            const currentTimestamp = new Date(row.created_at).getTime();
+            if (!student.batches[batchId]) {
+                const bInfo = batchInfo.find(b => b.id === batchId);
+                student.batches[batchId] = {
+                    batch_name: bInfo ? bInfo.batch_name : `Batch ${batchId}`,
+                    scores: [],
+                };
+            }
 
-            if (!existingTimestamp || currentTimestamp > existingTimestamp) {
-                student.scores[dateStr] = row.total_score !== null ? row.total_score : null;
-                student._timestamps[dateStr] = currentTimestamp;
+            // Add the score if there is an evaluation
+            if (row.total_score !== null && row.total_score !== undefined) {
+                student.batches[batchId].scores.push(row.total_score);
             }
         }
 
-        // --- Also include students from the batch who may have NO evaluations on selected dates ---
-        const allStudentsResult = await pool.query(
-            `SELECT DISTINCT s.email, s.name 
-             FROM students s 
-             WHERE s.college_id = $1 AND s.batch_id = $2
-             ORDER BY s.name`,
-            [college_id, batch_id]
-        );
-
-        // Merge: ensure every student in batch appears in the result
-        for (const row of allStudentsResult.rows) {
-            if (!studentMap.has(row.email)) {
-                studentMap.set(row.email, {
-                    email: row.email,
-                    name: row.name,
-                    scores: {},
-                    _timestamps: {},
-                });
-            }
-        }
-
-        // --- Calculate average and improvement ---
+        // Find students who appear in at least 2 of the selected batches
+        // (common students for comparison)
         const comparison = [];
 
         for (const [, student] of studentMap) {
-            const validScores = sortedDates
-                .map(d => student.scores[d])
-                .filter(s => s !== undefined && s !== null);
+            const batchCount = Object.keys(student.batches).length;
 
-            // Average of available scores
-            const average = validScores.length > 0
-                ? parseFloat((validScores.reduce((a, b) => a + b, 0) / validScores.length).toFixed(1))
-                : null;
+            // Build per-batch average scores
+            const batchScores = {};
+            let totalScore = 0;
+            let totalCount = 0;
 
-            // Improvement: difference between earliest and latest available score
-            let improvement = null;
-            if (validScores.length >= 2) {
-                // Find earliest and latest dates that have actual scores
-                const datesWithScores = sortedDates.filter(
-                    d => student.scores[d] !== undefined && student.scores[d] !== null
-                );
-                if (datesWithScores.length >= 2) {
-                    const earliest = student.scores[datesWithScores[0]];
-                    const latest = student.scores[datesWithScores[datesWithScores.length - 1]];
-                    improvement = latest - earliest;
+            for (const batchId of validBatchIds) {
+                if (student.batches[batchId]) {
+                    const scores = student.batches[batchId].scores;
+                    if (scores.length > 0) {
+                        const avg = parseFloat(
+                            (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1)
+                        );
+                        batchScores[batchId] = avg;
+                        totalScore += avg;
+                        totalCount++;
+                    } else {
+                        batchScores[batchId] = 'N/A';
+                    }
+                } else {
+                    batchScores[batchId] = 'N/A';
                 }
             }
 
-            // Build scores object with N/A for missing dates
-            const scoresOutput = {};
-            for (const d of sortedDates) {
-                scoresOutput[d] = student.scores[d] !== undefined && student.scores[d] !== null
-                    ? student.scores[d]
-                    : 'N/A';
+            // Overall average across all batches
+            const overallAvg = totalCount > 0
+                ? parseFloat((totalScore / totalCount).toFixed(1))
+                : null;
+
+            // Improvement: difference between first batch score and last batch score (where available)
+            let improvement = null;
+            const numericScores = validBatchIds
+                .map(id => batchScores[id])
+                .filter(s => s !== 'N/A');
+            if (numericScores.length >= 2) {
+                improvement = parseFloat((numericScores[numericScores.length - 1] - numericScores[0]).toFixed(1));
             }
 
             comparison.push({
                 email: student.email,
                 name: student.name,
-                scores: scoresOutput,
-                average,
+                batch_count: batchCount,
+                scores: batchScores,
+                average: overallAvg,
                 improvement,
+                is_common: batchCount >= 2,
             });
-
-            // Clean up internal field
         }
 
-        // Sort by name
-        comparison.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        // Sort: common students first, then by name
+        comparison.sort((a, b) => {
+            if (a.is_common !== b.is_common) return b.is_common ? 1 : -1;
+            return (a.name || '').localeCompare(b.name || '');
+        });
 
         res.json({
             college_id: parseInt(college_id),
-            batch_id: parseInt(batch_id),
-            dates: sortedDates,
+            batches: batchInfo.map(b => ({ id: b.id, name: b.batch_name })),
+            batch_ids: validBatchIds,
             students: comparison,
             total: comparison.length,
+            common_count: comparison.filter(s => s.is_common).length,
         });
     } catch (err) {
         console.error('Compare performance error:', err);
@@ -175,6 +166,7 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 // GET /api/compare-performance/dates
 // Get available evaluation dates for a batch
 // Query: ?college_id=X&batch_id=Y
+// (Kept for backward compatibility, but no longer used by the new UI)
 // ============================================
 router.get('/dates', authMiddleware, adminOnly, async (req, res) => {
     try {
