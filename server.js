@@ -26,6 +26,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/batches', require('./routes/batches'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/compare-performance', require('./routes/compare-performance'));
+app.use('/api/top-performers', require('./routes/top-performers'));
 
 // Health check
 app.get('/api/health', (req, res) => {
