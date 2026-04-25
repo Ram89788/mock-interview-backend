@@ -507,6 +507,37 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
 });
 
 // ============================================
+// DELETE /api/students/batch/:batchId — delete all students in a batch
+// ============================================
+router.delete('/batch/:batchId', authMiddleware, adminOnly, async (req, res) => {
+    try {
+        const { batchId } = req.params;
+        if (!batchId) {
+            return res.status(400).json({ error: 'Batch ID is required.' });
+        }
+
+        // Verify batch exists
+        const batchCheck = await pool.query('SELECT id, batch_name FROM batches WHERE id = $1', [batchId]);
+        if (batchCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Batch not found.' });
+        }
+
+        const result = await pool.query(
+            'DELETE FROM students WHERE batch_id = $1 RETURNING id',
+            [batchId]
+        );
+
+        res.json({
+            message: `${result.rows.length} student(s) deleted from batch "${batchCheck.rows[0].batch_name}".`,
+            deleted_count: result.rows.length,
+        });
+    } catch (err) {
+        console.error('Delete batch students error:', err);
+        res.status(500).json({ error: 'Server error.' });
+    }
+});
+
+// ============================================
 // DELETE /api/students/:id — delete student
 // ============================================
 router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
